@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Car Simulation</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="ui-container">
+  <h1>Car Simulation</h1>
+  <input type="file" id="fileInput" accept=".json" />
+  <div id="info">Upload a JSON file to start simulation</div>
+  <div id="status" class="status" style="display:none">Simulating...</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script>
+  let canData = [];
+  let index = 0;
+  let lastTimestamp = Date.now();
+  let car;
+  let cameraOffset = new THREE.Vector3(0, 5, -8); // Camera position relative to car
+  let cameraLookOffset = new THREE.Vector3(0, 0, 4); // Where the camera looks relative to car
+  let animationActive = false;
+
+  // Scene setup
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  // Lighting
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(10, 20, 10);
+  directionalLight.castShadow = true;
+  scene.add(directionalLight);
+
+  // Ground
+  const groundGeometry = new THREE.PlaneGeometry(500, 500);
+  const groundMaterial = new THREE.MeshStandardMaterial({
+    color: 0x228B22,
+    roughness: 0.8,
+    metalness: 0.2
+  });
+  const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // Road
+  const roadWidth = 10;
+  const roadLength = 200;
+  const roadGeometry = new THREE.PlaneGeometry(roadWidth, roadLength);
+  const roadMaterial = new THREE.MeshStandardMaterial({
+    color: 0x333333,
+    roughness: 0.8,
+    metalness: 0.2
+  });
+  const road = new THREE.Mesh(roadGeometry, roadMaterial);
+  road.rotation.x = -Math.PI / 2;
+  road.position.y = 0.01; // Slightly above ground to prevent z-fighting
+  scene.add(road);
+
+  // Road markings
+  const createRoadMarking = (posZ) => {
+    const markingGeometry = new THREE.PlaneGeometry(0.5, 3);
+    const markingMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const marking = new THREE.Mesh(markingGeometry, markingMaterial);
+    marking.rotation.x = -Math.PI / 2;
+    marking.position.set(0, 0.02, posZ); // Slightly above road
+    return marking;
+  };
+
+  // Add multiple road markings
+  for (let i = -roadLength/2 + 5; i < roadLength/2; i += 10) {
+    scene.add(createRoadMarking(i));
+  }
+
+  // Add landmarks/reference objects
+  function createLandmark(x, z, color, size = 1) {
+    const geometry = new THREE.BoxGeometry(size, size * 3, size);
+    const material = new THREE.MeshStandardMaterial({ color: color });
+    const landmark = new THREE.Mesh(geometry, material);
+    landmark.position.set(x, size * 1.5, z);
+    landmark.castShadow = true;
+    scene.add(landmark);
+
+    // Add a small text marker
+    const markerGeometry = new THREE.PlaneGeometry(size * 2, size / 2);
+    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+    marker.position.y = size * 3.5;
+    marker.rotation.y = Math.PI / 4;
+    landmark.add(marker);
+
+    return landmark;
+  }
+
+  // Create landmarks on both sides of the road
+  const landmarks = [];
+  const colors = [0x8844aa, 0x44aa88, 0xaaaa44, 0xaa4444, 0x4444aa];
+
+  for (let z = -roadLength/2 + 20; z < roadLength/2; z += 40) {
+    // Left side landmarks
+    landmarks.push(createLandmark(-roadWidth - 5, z, colors[Math.floor(Math.random() * colors.length)]));
+
+    // Right side landmarks
+    landmarks.push(createLandmark(roadWidth + 5, z, colors[Math.floor(Math.random() * colors.length)]));
+  }
+
+  // Add trees
+  function createTree(x, z) {
+    const treeGroup = new THREE.Group();
+
+    // Trunk
+    const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.7, 3, 8);
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+    const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+    trunk.castShadow = true;
+    treeGroup.add(trunk);
+
+    // Foliage
+    const foliageGeometry = new THREE.ConeGeometry(2, 4, 8);
+    const foliageMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+    const foliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
+    foliage.position.y = 3.5;
+    foliage.castShadow = true;
+    treeGroup.add(foliage);
+
+    treeGroup.position.set(x, 1.5, z);
+    scene.add(treeGroup);
+
+    return treeGroup;
+  }
+
+  // Add trees on both sides of the road
+  for (let z = -roadLength/2 + 10; z < roadLength/2; z += 20) {
+    // Place trees with some randomization
+    createTree(-roadWidth - 8 - Math.random() * 5, z + Math.random() * 10);
+    createTree(roadWidth + 8 + Math.random() * 5, z - Math.random() * 10);
+  }
+
+  // Add a start/finish line
+  const startLineGeometry = new THREE.PlaneGeometry(roadWidth, 2);
+  const startLineMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.8
+  });
+  const startLine = new THREE.Mesh(startLineGeometry, startLineMaterial);
+  startLine.rotation.x = -Math.PI / 2;
+  startLine.position.set(0, 0.03, -roadLength/2 + 10); // Near the start
+  scene.add(startLine);
+
+  // Car
+  function createCar() {
+    const carGroup = new THREE.Group();
+
+    // Car body
+    const bodyGeometry = new THREE.BoxGeometry(2, 1, 4);
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: 0xff0000,
+      roughness: 0.5,
+      metalness: 0.7
+    });
+    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    body.position.y = 0.5;
+    body.castShadow = true;
+    carGroup.add(body);
+
+    // Car roof
+    const roofGeometry = new THREE.BoxGeometry(1.7, 0.7, 2);
+    const roofMaterial = new THREE.MeshStandardMaterial({
+      color: 0xdddddd,
+      roughness: 0.5,
+      metalness: 0.7
+    });
+    const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+    roof.position.y = 1.35;
+    roof.position.z = -0.5;
+    roof.castShadow = true;
+    carGroup.add(roof);
+
+    // Wheels
+    const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+    const wheelMaterial = new THREE.MeshStandardMaterial({
+      color: 0x333333,
+      roughness: 0.9,
+      metalness: 0.1
+    });
+
+    // Front left wheel
+    const wheelFL = new THREE.Mesh(wheelGeometry, wheelMaterial);
+    wheelFL.rotation.z = Math.PI / 2;
+    wheelFL.position.set(-1.1, 0.4, 1.2);
+    wheelFL.castShadow = true;
+    carGroup.add(wheelFL);
+
+    // Front right wheel
+    const wheelFR = new THREE.Mesh(wheelGeometry, wheelMaterial);
+    wheelFR.rotation.z = Math.PI / 2;
+    wheelFR.position.set(1.1, 0.4, 1.2);
+    wheelFR.castShadow = true;
+    carGroup.add(wheelFR);
+
+    // Rear left wheel
+    const wheelRL = new THREE.Mesh(wheelGeometry, wheelMaterial);
+    wheelRL.rotation.z = Math.PI / 2;
+    wheelRL.position.set(-1.1, 0.4, -1.2);
+    wheelRL.castShadow = true;
+    carGroup.add(wheelRL);
+
+    // Rear right wheel
+    const wheelRR = new THREE.Mesh(wheelGeometry, wheelMaterial);
+    wheelRR.rotation.z = Math.PI / 2;
+    wheelRR.position.set(1.1, 0.4, -1.2);
+    wheelRR.castShadow = true;
+    carGroup.add(wheelRR);
+
+    return carGroup;
+  }
+
+  car = createCar();
+  car.position.y = 0;
+  scene.add(car);
+
+  // Initial camera position
+  updateCameraPosition();
+
+  function updateCameraPosition() {
+    // Calculate camera position based on car's position and rotation
+    const cameraWorldPosition = cameraOffset.clone();
+    cameraWorldPosition.applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+    cameraWorldPosition.add(car.position);
+
+    // Calculate the target position based on car's position and rotation
+    const targetPosition = cameraLookOffset.clone();
+    targetPosition.applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+    targetPosition.add(car.position);
+
+    // Update camera position and target
+    camera.position.copy(cameraWorldPosition);
+    camera.lookAt(targetPosition);
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+
+    const now = Date.now();
+    if (canData.length > 0 && animationActive && now - lastTimestamp > 100 && index < canData.length) {
+      const data = canData[index];
+
+      // Convert steering angle to a more reasonable rotation value
+      // Reduce the steering impact by applying a smaller factor
+      const steeringFactor = 0.05; // Reduce this value to decrease rotation effect
+      const normalizedAngle = data.StrAngle * Math.PI / 180 * steeringFactor;
+
+      // Update car position - use the car's current rotation for direction
+      const speed = data.WheelBasedVehicleSpeed * 0.01; // Scale speed appropriately
+      const direction = new THREE.Vector3(0, 0, 1); // Forward direction
+      direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+      direction.normalize();
+      direction.multiplyScalar(speed);
+      car.position.add(direction);
+
+      // Apply gradual steering change
+      car.rotation.y -= normalizedAngle;
+
+      // Update simulation info
+      document.getElementById('info').textContent =
+              `Speed: ${data.WheelBasedVehicleSpeed.toFixed(2)} km/h | Angle: ${data.StrAngle.toFixed(2)}° | Frame: ${index+1}/${canData.length}`;
+
+      // Add trail effect behind the car (only when moving at speed)
+      if (index % 10 === 0 && data.WheelBasedVehicleSpeed > 5) {
+        const trailGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+        const trailMaterial = new THREE.MeshBasicMaterial({
+          color: 0xff8000,
+          transparent: true,
+          opacity: 0.7
+        });
+        const trail = new THREE.Mesh(trailGeometry, trailMaterial);
+        trail.position.copy(car.position);
+        trail.position.y = 0.2;
+        scene.add(trail);
+
+        // Fade out and remove trail
+        setTimeout(() => {
+          const fadeInterval = setInterval(() => {
+            trail.material.opacity -= 0.05;
+            if (trail.material.opacity <= 0) {
+              scene.remove(trail);
+              clearInterval(fadeInterval);
+            }
+          }, 100);
+        }, 1000);
+      }
+
+      index++;
+      lastTimestamp = now;
+
+      // Update camera to follow car
+      updateCameraPosition();
+
+      // Check if simulation has ended
+      if (index >= canData.length) {
+        document.getElementById('status').textContent = "Simulation Complete";
+        animationActive = false;
+      }
+    }
+
+    // Add slight rotation to landmarks for visual effect
+    landmarks.forEach((landmark, i) => {
+      landmark.rotation.y += 0.002 * (i % 2 === 0 ? 1 : -1);
+    });
+
+    renderer.render(scene, camera);
+  }
+
+  animate();
+
+  document.getElementById('fileInput').addEventListener('change', function(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const json = JSON.parse(e.target.result);
+        // Filter messages by canId 0x96 and extract signal data
+        canData = json.messages
+                .filter(msg => msg.canId === "0x96")
+                .map(msg => msg.signals);
+
+        if (canData.length === 0) {
+          document.getElementById('info').textContent = "No valid simulation data found";
+          return;
+        }
+
+        // Reset simulation
+        index = 0;
+        lastTimestamp = Date.now();
+        car.position.set(0, 0, 0);
+        car.rotation.y = 0;
+        updateCameraPosition();
+
+        // Update UI
+        document.getElementById('status').style.display = "inline-block";
+        document.getElementById('info').textContent = "Simulation ready. Data frames: " + canData.length;
+        animationActive = true;
+      } catch (error) {
+        document.getElementById('info').textContent = "Error loading file: " + error.message;
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  // Handle window resize
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+</script>
+</body>
+</html>
